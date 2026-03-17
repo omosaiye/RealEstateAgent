@@ -2,7 +2,7 @@
 
 This repository contains the bootstrap scaffold for the Real Estate Listing Monitor Agent MVP described in [PRD.md](/Users/dadsomosaiye/devProjects/RealEstateAgent/PRD.md).
 
-Milestone 1 through Milestone 5 are now in place, and the Milestone 6 Telegram service module is implemented. The project includes the bootstrap structure, YAML config loading, normalized models, provider normalization, deterministic listing filtering, SQLite-backed state and deduplication helpers, and plain-text Telegram alert formatting and delivery helpers.
+Milestone 1 through Milestone 7 are now in place. The project includes the bootstrap structure, YAML config loading, normalized models, provider normalization, deterministic listing filtering, SQLite-backed state and deduplication helpers, plain-text Telegram alert formatting and delivery helpers, and an LLM summarizer service with deterministic fallback output.
 
 ## Current Status
 
@@ -12,7 +12,8 @@ Milestone 1 through Milestone 5 are now in place, and the Milestone 6 Telegram s
 - Filtering is implemented with unit test coverage.
 - SQLite state and deterministic deduplication are implemented with unit test coverage.
 - Deterministic Telegram formatting, message splitting, and Bot API delivery are implemented in the service layer.
-- Main orchestration and LLM summarization are not implemented yet.
+- LLM summarization is implemented in the service layer with a prompt template, OpenAI-backed request path, and deterministic fallback formatter.
+- Main orchestration is not implemented yet.
 
 ## Project Structure
 
@@ -45,3 +46,4 @@ Milestone 1 through Milestone 5 are now in place, and the Milestone 6 Telegram s
 
 - Secrets belong in environment variables. Use `.env.example` as a reference.
 - `config/searches.yaml` includes one sample search that matches the PRD-required fields.
+- `OPENAI_API_KEY` is required when instantiating the OpenAI summarizer service.
