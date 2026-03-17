@@ -2,13 +2,13 @@
 
 This repository contains the bootstrap scaffold for the Real Estate Listing Monitor Agent MVP described in [PRD.md](/Users/dadsomosaiye/devProjects/RealEstateAgent/PRD.md).
 
-Only Milestone 1 is set up right now. The project structure, dependency list, environment template, and placeholder files are in place so future milestones can build on a clear foundation.
+Milestone 1 and Milestone 2 are now in place. The project includes the bootstrap structure plus a simple YAML config loader, search configuration models, and the normalized listing model.
 
 ## Current Status
 
 - Project bootstrap is complete.
-- Application logic is not implemented yet.
-- Placeholder files mark the planned modules from the PRD.
+- Config loading and core data models are implemented.
+- Provider fetching, filtering, deduplication, Telegram delivery, and LLM summarization are not implemented yet.
 
 ## Project Structure
 
@@ -35,4 +35,4 @@ Only Milestone 1 is set up right now. The project structure, dependency list, en
 ## Notes
 
 - Secrets belong in environment variables. Use `.env.example` as a reference.
-- `config/searches.yaml` is a placeholder and will be filled in during a later milestone.
+- `config/searches.yaml` now includes one sample search that matches the PRD-required fields.

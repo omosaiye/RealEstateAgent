@@ -1,1 +1,17 @@
-# Placeholder search configuration for a future milestone.
+searches:
+  - search_name: raleigh_primary
+    enabled: true
+    location: "Raleigh, NC"
+    max_price: 550000
+    min_beds: 3
+    min_baths: 2
+    property_types:
+      - single_family
+      - townhome
+    max_hoa: 250
+    min_sqft: 1600
+    keywords_include:
+      - garage
+    keywords_exclude:
+      - leasehold
+      - auction
