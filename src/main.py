@@ -34,13 +34,6 @@ LOGGER_NAME = "listing_monitor"
 DRY_RUN_ENV_VAR = "LISTING_MONITOR_DRY_RUN"
 
 
-class _DryRunNotifier(Notifier):
-    """No-op notifier used to avoid real Telegram setup in dry-run mode."""
-
-    def send_message(self, message: str) -> None:
-        del message
-
-
 def run_listing_monitor(
     *,
     config_path: str | Path = DEFAULT_SEARCHES_PATH,
@@ -74,12 +67,7 @@ def run_listing_monitor(
         )
         resolved_state_service = state_service or SQLiteStateService(resolved_db_path)
         resolved_state_service.bootstrap()
-        resolved_provider = provider or SampleListingProvider()
-        resolved_summarizer = summarizer or OpenAISummarizer()
-        resolved_notifier = notifier or (
-            _DryRunNotifier() if dry_run else TelegramNotifier()
-        )
-    except (ConfigError, ProviderError, SummarizerError, TelegramError, StateError) as exc:
+    except (ConfigError, StateError) as exc:
         log_event(app_logger, logging.ERROR, "run_failed", error=str(exc))
         return 1
 
@@ -87,13 +75,30 @@ def run_listing_monitor(
     total_sent = 0
     search_failures = 0
 
+    if not enabled_searches:
+        log_event(
+            app_logger,
+            logging.INFO,
+            "run_complete",
+            searches_total=len(resolved_searches),
+            enabled_searches=0,
+            total_sent=0,
+        )
+        return 0
+
+    try:
+        resolved_provider = provider or SampleListingProvider()
+    except ProviderError as exc:
+        log_event(app_logger, logging.ERROR, "run_failed", error=str(exc))
+        return 1
+
     for search_config in enabled_searches:
         try:
             total_sent += _run_single_search(
                 search_config=search_config,
                 provider=resolved_provider,
-                summarizer=resolved_summarizer,
-                notifier=resolved_notifier,
+                summarizer=summarizer,
+                notifier=notifier,
                 state_service=resolved_state_service,
                 logger=app_logger,
                 dry_run=dry_run,
@@ -193,8 +198,8 @@ def _run_single_search(
     *,
     search_config: SearchConfig,
     provider: ListingProvider,
-    summarizer: ListingSummarizer,
-    notifier: Notifier,
+    summarizer: ListingSummarizer | None,
+    notifier: Notifier | None,
     state_service: SQLiteStateService,
     logger: logging.Logger,
     dry_run: bool,
@@ -277,7 +282,8 @@ def _run_single_search(
         )
         return 0
 
-    summary_text = summarizer.summarize(
+    resolved_summarizer = summarizer or OpenAISummarizer()
+    summary_text = resolved_summarizer.summarize(
         search_config.search_name,
         search_config,
         sendable_listings,
@@ -318,7 +324,8 @@ def _run_single_search(
         )
         return 0
 
-    notifier.send_message(summary_text)
+    resolved_notifier = notifier or TelegramNotifier()
+    resolved_notifier.send_message(summary_text)
     log_event(
         logger,
         logging.INFO,

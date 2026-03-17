@@ -316,6 +316,98 @@ def test_run_listing_monitor_dry_run_uses_noop_notifier_when_none_is_supplied(
     assert "event=dry_run_message" in caplog.text
 
 
+def test_run_listing_monitor_succeeds_when_all_searches_are_disabled_without_building_services(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    search_config = build_search_config(enabled=False)
+    state_service = FakeStateService()
+    logger = logging.getLogger("tests.test_main.disabled_searches")
+
+    monkeypatch.setattr(
+        main_module,
+        "SampleListingProvider",
+        lambda: (_ for _ in ()).throw(AssertionError("provider should not be built")),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "OpenAISummarizer",
+        lambda: (_ for _ in ()).throw(AssertionError("summarizer should not be built")),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "TelegramNotifier",
+        lambda: (_ for _ in ()).throw(AssertionError("notifier should not be built")),
+    )
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        state_service=state_service,
+        logger=logger,
+    )
+
+    assert exit_code == 0
+    assert state_service.bootstrap_called is True
+    assert "event=run_complete" in caplog.text
+    assert "enabled_searches=0" in caplog.text
+
+
+def test_run_listing_monitor_skips_summary_and_send_setup_when_no_listings_are_sendable(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    search_config = build_search_config()
+    provider = FakeProvider(
+        {
+            search_config.search_name: [
+                build_listing(price=410000),
+            ],
+        }
+    )
+    state_service = FakeStateService(
+        [
+            build_state(
+                listing_id="listing-123",
+                search_name=search_config.search_name,
+                last_seen_price=410000,
+                last_seen_status="active",
+                last_sent_at="2026-03-16T08:00:00+00:00",
+            )
+        ]
+    )
+    logger = logging.getLogger("tests.test_main.no_sendable_listings")
+
+    monkeypatch.setattr(
+        main_module,
+        "OpenAISummarizer",
+        lambda: (_ for _ in ()).throw(AssertionError("summarizer should not be built")),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "TelegramNotifier",
+        lambda: (_ for _ in ()).throw(AssertionError("notifier should not be built")),
+    )
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        provider=provider,
+        summarizer=None,
+        notifier=None,
+        state_service=state_service,
+        logger=logger,
+    )
+
+    assert exit_code == 0
+    assert provider.calls == ["triangle_homes"]
+    assert len(state_service.upsert_calls) == 1
+    assert "event=summary_complete" in caplog.text
+    assert "changed=0" in caplog.text
+    assert "event=telegram_send_complete" in caplog.text
+    assert "sent=0" in caplog.text
+
+
 def test_main_passes_dry_run_flag_to_run_listing_monitor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

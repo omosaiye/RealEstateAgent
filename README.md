@@ -24,7 +24,6 @@ This README is written for a junior engineer setting up the project from scratch
 Important current limitations:
 
 - The sample provider points to `https://api.example.com/v1/listings`, which is a placeholder endpoint. A default end-to-end run will not succeed against real listing data until the provider adapter is wired to a real API.
-- The GitHub Actions workflow uses a fresh runner each time, so the default SQLite file does not persist between workflow runs.
 
 ## Repository Layout
 
@@ -115,9 +114,10 @@ set +a
 Important notes:
 
 - The application does not automatically load `.env` files. If you skip the `source .env` step, the app will not see your secrets.
-- `src.main` creates `SampleListingProvider()`, `OpenAISummarizer()`, and `TelegramNotifier()` during startup. That means all four environment variables above are required for the default app entrypoint.
-- If dry-run mode is enabled, `src.main` skips real Telegram setup and delivery. In that mode, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not required for the default entrypoint.
-- If `OPENAI_API_KEY` is missing, startup fails before the summarizer fallback logic is reached. The fallback only helps after the OpenAI request is attempted and fails.
+- `LISTING_PROVIDER_API_KEY` is required when at least one enabled search runs.
+- `OPENAI_API_KEY` is required only when the run has new or changed listings that need summarization.
+- If dry-run mode is enabled, `src.main` skips real Telegram setup and delivery. In that mode, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not required.
+- If `OPENAI_API_KEY` is missing on a run that needs a summary, the run fails clearly before fallback formatting can be used. The fallback only applies after the OpenAI request is attempted and fails.
 
 ## Configure `config/searches.yaml`
 
@@ -311,7 +311,9 @@ Current workflow behavior:
 - runs on a schedule every 6 hours
 - supports manual runs with `workflow_dispatch`
 - installs dependencies with `pip`
+- restores the last cached `listing_state.db` before each run
 - runs `python -m src.main --log-level INFO`
+- saves the updated `listing_state.db` back to the GitHub Actions cache after a successful run
 
 ### Required GitHub Repository Secrets
 
@@ -337,8 +339,6 @@ To run the workflow manually:
 
 ### Important Deployment Notes
 
-- The current workflow does not persist `listing_state.db` between runs because GitHub-hosted runners are ephemeral.
-- That means deduplication state is not preserved across scheduled workflow runs yet.
 - The current workflow still depends on the sample provider adapter, so a real production deployment is blocked until a real provider endpoint is implemented.
 - Manual `workflow_dispatch` runs are not dry runs unless you explicitly pass or configure dry-run behavior for the workflow command.
 
@@ -427,9 +427,9 @@ Run tests first if you want to verify the service layer without sending live mes
 pytest tests/test_telegram_service.py
 ```
 
-### GitHub Actions runs but does not remember prior listings
+### GitHub Actions run starts without prior listing state
 
-This is the current behavior of the checked-in workflow. Each GitHub-hosted runner starts with a clean filesystem, so the default SQLite database is recreated on each run.
+The workflow restores `listing_state.db` from the GitHub Actions cache before the Python job runs and saves it again after a successful run. If a run behaves like it has no prior state, check whether a previous successful run created the cache for that branch and operating system.
 
 ## Suggested Local Verification Order
 
