@@ -1,6 +1,9 @@
 import logging
 
-from src.main import run_listing_monitor
+import pytest
+
+import src.main as main_module
+from src.main import main, run_listing_monitor
 from src.models import Listing, SearchConfig
 from src.providers.base import ProviderError
 from src.services.state_service import ListingState
@@ -247,6 +250,105 @@ def test_run_listing_monitor_does_not_update_state_when_telegram_send_fails(
     assert state_service.upsert_calls == []
     assert "event=run_failed" in caplog.text
     assert "Telegram sendMessage request failed." in caplog.text
+
+
+def test_run_listing_monitor_dry_run_logs_message_and_skips_send_and_state_updates(
+    caplog,
+) -> None:
+    search_config = build_search_config()
+    provider = FakeProvider(
+        {
+            search_config.search_name: [build_listing()],
+        }
+    )
+    summarizer = FakeSummarizer()
+    notifier = FakeNotifier()
+    state_service = FakeStateService()
+    logger = logging.getLogger("tests.test_main.dry_run")
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        provider=provider,
+        summarizer=summarizer,
+        notifier=notifier,
+        state_service=state_service,
+        logger=logger,
+        dry_run=True,
+    )
+
+    assert exit_code == 0
+    assert len(summarizer.calls) == 1
+    assert notifier.messages == []
+    assert state_service.upsert_calls == []
+    assert 'event=dry_run_message search_name="triangle_homes"' in caplog.text
+    assert "Summary for triangle_homes: 1 listing(s)" in caplog.text
+    assert "event=state_persist_skipped" in caplog.text
+    assert 'dry_run=true' in caplog.text
+
+
+def test_run_listing_monitor_dry_run_uses_noop_notifier_when_none_is_supplied(
+    caplog,
+) -> None:
+    search_config = build_search_config()
+    provider = FakeProvider(
+        {
+            search_config.search_name: [build_listing()],
+        }
+    )
+    summarizer = FakeSummarizer()
+    state_service = FakeStateService()
+    logger = logging.getLogger("tests.test_main.dry_run_default_notifier")
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        provider=provider,
+        summarizer=summarizer,
+        notifier=None,
+        state_service=state_service,
+        logger=logger,
+        dry_run=True,
+    )
+
+    assert exit_code == 0
+    assert state_service.upsert_calls == []
+    assert "event=dry_run_message" in caplog.text
+
+
+def test_main_passes_dry_run_flag_to_run_listing_monitor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run_listing_monitor(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(main_module, "run_listing_monitor", fake_run_listing_monitor)
+
+    exit_code = main(["--dry-run", "--log-level", "DEBUG"])
+
+    assert exit_code == 0
+    assert captured_kwargs["dry_run"] is True
+
+
+def test_main_enables_dry_run_from_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run_listing_monitor(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(main_module, "run_listing_monitor", fake_run_listing_monitor)
+    monkeypatch.setenv(main_module.DRY_RUN_ENV_VAR, "true")
+
+    exit_code = main([])
+
+    assert exit_code == 0
+    assert captured_kwargs["dry_run"] is True
 
 
 def build_search_config(**overrides: object) -> SearchConfig:

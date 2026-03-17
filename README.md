@@ -24,7 +24,6 @@ This README is written for a junior engineer setting up the project from scratch
 Important current limitations:
 
 - The sample provider points to `https://api.example.com/v1/listings`, which is a placeholder endpoint. A default end-to-end run will not succeed against real listing data until the provider adapter is wired to a real API.
-- There is currently no end-to-end dry-run flag or config option in the app.
 - The GitHub Actions workflow uses a fresh runner each time, so the default SQLite file does not persist between workflow runs.
 
 ## Repository Layout
@@ -102,6 +101,7 @@ LISTING_PROVIDER_API_KEY=your-provider-api-key
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_CHAT_ID=your-telegram-chat-id
 OPENAI_API_KEY=your-openai-api-key
+LISTING_MONITOR_DRY_RUN=0
 ```
 
 Load those values into your current shell session:
@@ -116,6 +116,7 @@ Important notes:
 
 - The application does not automatically load `.env` files. If you skip the `source .env` step, the app will not see your secrets.
 - `src.main` creates `SampleListingProvider()`, `OpenAISummarizer()`, and `TelegramNotifier()` during startup. That means all four environment variables above are required for the default app entrypoint.
+- If dry-run mode is enabled, `src.main` skips real Telegram setup and delivery. In that mode, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not required for the default entrypoint.
 - If `OPENAI_API_KEY` is missing, startup fails before the summarizer fallback logic is reached. The fallback only helps after the OpenAI request is attempted and fails.
 
 ## Configure `config/searches.yaml`
@@ -209,6 +210,18 @@ python -m src.main \
   --log-level INFO
 ```
 
+Run a safe end-to-end dry run:
+
+```bash
+python -m src.main --dry-run
+```
+
+You can also enable dry run from the environment:
+
+```bash
+LISTING_MONITOR_DRY_RUN=1 python -m src.main
+```
+
 Use the helper script if you want the repo to always run with `.venv/bin/python`:
 
 ```bash
@@ -231,9 +244,17 @@ What a normal run does:
 6. sends Telegram messages
 7. updates SQLite state after successful sends
 
+What dry-run mode does:
+
+- still loads config, bootstraps the database, fetches listings, filters them, deduplicates them, and builds the summary
+- skips Telegram delivery
+- logs the exact message that would have been sent
+- skips listing state updates so test runs do not mark listings as sent
+
 Important safety note:
 
-- A real `python -m src.main` run is not a safe dry run. If you have working provider and Telegram credentials and the provider returns new or changed listings, the app will attempt to send a real Telegram message.
+- `python -m src.main --dry-run` is the safe local test path for Milestone 10.1.
+- A real `python -m src.main` run without `--dry-run` will attempt to send a Telegram message if the provider returns new or changed listings.
 
 Important current limitation:
 
@@ -261,26 +282,21 @@ ruff check .
 
 These tests mock external calls. You do not need live provider, Telegram, or OpenAI access to run them.
 
-## Dry-Run Status
+## Dry-Run Mode
 
-Milestone 10.1 called for an end-to-end dry-run mode, but it is not implemented in the current codebase.
+Milestone 10.1 is implemented.
 
-As of this README version:
+Enable it with either:
 
-- there is no `--dry-run` CLI flag in `src/main.py`
-- there is no config setting that skips Telegram sending
-- there is no notifier swap in the default entrypoint that logs messages instead of sending them
+- `python -m src.main --dry-run`
+- `LISTING_MONITOR_DRY_RUN=1 python -m src.main`
 
-Safe alternatives today:
+Dry-run behavior:
 
-1. Use `pytest` for the safest no-network verification path.
-2. Use a temporary database path when testing local state behavior:
-
-```bash
-python -m src.main --db-path /tmp/listing_state.db
-```
-
-3. If you must do a real manual run after wiring a real provider, use a separate Telegram test chat and test credentials instead of production ones.
+- the app logs the message that would have been sent to Telegram
+- the app does not call the Telegram Bot API
+- the app does not update listing state after the run
+- the rest of the pipeline still runs so you can verify end-to-end behavior safely
 
 ## GitHub Actions Deployment
 
@@ -324,7 +340,7 @@ To run the workflow manually:
 - The current workflow does not persist `listing_state.db` between runs because GitHub-hosted runners are ephemeral.
 - That means deduplication state is not preserved across scheduled workflow runs yet.
 - The current workflow still depends on the sample provider adapter, so a real production deployment is blocked until a real provider endpoint is implemented.
-- Manual `workflow_dispatch` runs are not dry runs. They can send real Telegram messages if the provider returns sendable listings.
+- Manual `workflow_dispatch` runs are not dry runs unless you explicitly pass or configure dry-run behavior for the workflow command.
 
 ## Troubleshooting
 

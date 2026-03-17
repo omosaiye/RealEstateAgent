@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import httpx
 import pytest
 
@@ -29,6 +31,37 @@ class SpyHttpClient:
         )
         request = httpx.Request("GET", url, params=params, headers=headers)
         return httpx.Response(200, json=self._payload, request=request)
+
+
+class QueueHttpClient:
+    def __init__(
+        self,
+        outcomes: list[Callable[[httpx.Request], httpx.Response | Exception]],
+    ) -> None:
+        self._outcomes = outcomes
+        self.calls: list[dict[str, object]] = []
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, object],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> httpx.Response:
+        self.calls.append(
+            {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        request = httpx.Request("GET", url, params=params, headers=headers)
+        outcome = self._outcomes.pop(0)(request)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 @pytest.fixture
@@ -147,3 +180,128 @@ def test_sample_provider_requires_provider_api_key(
         match="LISTING_PROVIDER_API_KEY environment variable is required",
     ):
         SampleListingProvider()
+
+
+def test_sample_provider_retries_timeout_then_returns_results(
+    search_config: SearchConfig,
+) -> None:
+    client = QueueHttpClient(
+        outcomes=[
+            lambda request: httpx.ReadTimeout("Request timed out", request=request),
+            lambda request: httpx.Response(
+                200,
+                json={"results": []},
+                request=request,
+            ),
+        ]
+    )
+    sleep_calls: list[float] = []
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=client,
+        retry_backoff_seconds=(0.01, 0.02),
+        sleep=sleep_calls.append,
+    )
+
+    listings = provider.fetch_listings(search_config)
+
+    assert listings == []
+    assert len(client.calls) == 2
+    assert sleep_calls == [0.01]
+
+
+def test_sample_provider_retries_retryable_http_status_then_returns_results(
+    search_config: SearchConfig,
+) -> None:
+    client = QueueHttpClient(
+        outcomes=[
+            lambda request: httpx.Response(
+                503,
+                json={"results": []},
+                request=request,
+            ),
+            lambda request: httpx.Response(
+                200,
+                json={"results": []},
+                request=request,
+            ),
+        ]
+    )
+    sleep_calls: list[float] = []
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=client,
+        retry_backoff_seconds=(0.01, 0.02),
+        sleep=sleep_calls.append,
+    )
+
+    listings = provider.fetch_listings(search_config)
+
+    assert listings == []
+    assert len(client.calls) == 2
+    assert sleep_calls == [0.01]
+
+
+def test_sample_provider_stops_after_small_number_of_retryable_failures(
+    search_config: SearchConfig,
+) -> None:
+    client = QueueHttpClient(
+        outcomes=[
+            lambda request: httpx.Response(
+                503,
+                json={"results": []},
+                request=request,
+            ),
+            lambda request: httpx.Response(
+                503,
+                json={"results": []},
+                request=request,
+            ),
+        ]
+    )
+    sleep_calls: list[float] = []
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=client,
+        retry_backoff_seconds=(0.01,),
+        sleep=sleep_calls.append,
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match="status 503 for search 'triangle_homes' after 2 attempts",
+    ):
+        provider.fetch_listings(search_config)
+
+    assert len(client.calls) == 2
+    assert sleep_calls == [0.01]
+
+
+def test_sample_provider_does_not_retry_non_retryable_http_status(
+    search_config: SearchConfig,
+) -> None:
+    client = QueueHttpClient(
+        outcomes=[
+            lambda request: httpx.Response(
+                404,
+                json={"detail": "missing"},
+                request=request,
+            )
+        ]
+    )
+    sleep_calls: list[float] = []
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=client,
+        retry_backoff_seconds=(0.01, 0.02),
+        sleep=sleep_calls.append,
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match="status 404 for search 'triangle_homes'\\.",
+    ):
+        provider.fetch_listings(search_config)
+
+    assert len(client.calls) == 1
+    assert sleep_calls == []

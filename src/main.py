@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
 
 import argparse
 import logging
+import os
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,12 +31,21 @@ from src.services.summarize_service import (
 from src.services.telegram_service import Notifier, TelegramError, TelegramNotifier
 
 LOGGER_NAME = "listing_monitor"
+DRY_RUN_ENV_VAR = "LISTING_MONITOR_DRY_RUN"
+
+
+class _DryRunNotifier(Notifier):
+    """No-op notifier used to avoid real Telegram setup in dry-run mode."""
+
+    def send_message(self, message: str) -> None:
+        del message
 
 
 def run_listing_monitor(
     *,
     config_path: str | Path = DEFAULT_SEARCHES_PATH,
     state_db_path: str | Path = DEFAULT_DB_PATH,
+    dry_run: bool = False,
     searches: Sequence[SearchConfig] | None = None,
     provider: ListingProvider | None = None,
     summarizer: ListingSummarizer | None = None,
@@ -55,6 +65,7 @@ def run_listing_monitor(
         "run_started",
         config_path=resolved_config_path,
         db_path=resolved_db_path,
+        dry_run=dry_run,
     )
 
     try:
@@ -65,7 +76,9 @@ def run_listing_monitor(
         resolved_state_service.bootstrap()
         resolved_provider = provider or SampleListingProvider()
         resolved_summarizer = summarizer or OpenAISummarizer()
-        resolved_notifier = notifier or TelegramNotifier()
+        resolved_notifier = notifier or (
+            _DryRunNotifier() if dry_run else TelegramNotifier()
+        )
     except (ConfigError, ProviderError, SummarizerError, TelegramError, StateError) as exc:
         log_event(app_logger, logging.ERROR, "run_failed", error=str(exc))
         return 1
@@ -83,6 +96,7 @@ def run_listing_monitor(
                 notifier=resolved_notifier,
                 state_service=resolved_state_service,
                 logger=app_logger,
+                dry_run=dry_run,
             )
         except ProviderError as exc:
             search_failures += 1
@@ -147,6 +161,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Python log level such as DEBUG, INFO, WARNING, or ERROR.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Skip Telegram delivery and state updates, and log the message that "
+            "would have been sent."
+        ),
+    )
     return parser
 
 
@@ -155,10 +177,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_argument_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    try:
+        dry_run = _resolve_dry_run(args.dry_run)
+    except ValueError as exc:
+        parser.error(str(exc))
     configure_logging(args.log_level)
     return run_listing_monitor(
         config_path=args.config_path,
         state_db_path=args.db_path,
+        dry_run=dry_run,
     )
 
 
@@ -170,6 +197,7 @@ def _run_single_search(
     notifier: Notifier,
     state_service: SQLiteStateService,
     logger: logging.Logger,
+    dry_run: bool,
 ) -> int:
     log_event(
         logger,
@@ -237,11 +265,15 @@ def _run_single_search(
             search_name=search_config.search_name,
             sent=0,
             skipped=True,
+            dry_run=dry_run,
         )
-        _persist_listing_state(
+        _persist_listing_state_if_needed(
             matched_listings=matched_listings,
             sendable_listings=[],
             state_service=state_service,
+            logger=logger,
+            search_name=search_config.search_name,
+            dry_run=dry_run,
         )
         return 0
 
@@ -258,6 +290,34 @@ def _run_single_search(
         changed=len(sendable_listings),
     )
 
+    if dry_run:
+        log_event(
+            logger,
+            logging.INFO,
+            "dry_run_message",
+            search_name=search_config.search_name,
+            message=summary_text,
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram_send_complete",
+            search_name=search_config.search_name,
+            sent=0,
+            would_send=len(sendable_listings),
+            dry_run=True,
+            skipped=True,
+        )
+        _persist_listing_state_if_needed(
+            matched_listings=matched_listings,
+            sendable_listings=sendable_listings,
+            state_service=state_service,
+            logger=logger,
+            search_name=search_config.search_name,
+            dry_run=True,
+        )
+        return 0
+
     notifier.send_message(summary_text)
     log_event(
         logger,
@@ -265,12 +325,16 @@ def _run_single_search(
         "telegram_send_complete",
         search_name=search_config.search_name,
         sent=len(sendable_listings),
+        dry_run=False,
     )
 
-    _persist_listing_state(
+    _persist_listing_state_if_needed(
         matched_listings=matched_listings,
         sendable_listings=sendable_listings,
         state_service=state_service,
+        logger=logger,
+        search_name=search_config.search_name,
+        dry_run=False,
     )
     return len(sendable_listings)
 
@@ -314,6 +378,51 @@ def _persist_listing_state(
             upsert_kwargs["last_sent_at"] = sent_at
 
         state_service.upsert_listing_state(**upsert_kwargs)
+
+
+def _persist_listing_state_if_needed(
+    *,
+    matched_listings: Sequence[Listing],
+    sendable_listings: Sequence[Listing],
+    state_service: SQLiteStateService,
+    logger: logging.Logger,
+    search_name: str,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        log_event(
+            logger,
+            logging.INFO,
+            "state_persist_skipped",
+            search_name=search_name,
+            dry_run=True,
+        )
+        return
+
+    _persist_listing_state(
+        matched_listings=matched_listings,
+        sendable_listings=sendable_listings,
+        state_service=state_service,
+    )
+
+
+def _resolve_dry_run(cli_dry_run: bool) -> bool:
+    if cli_dry_run:
+        return True
+
+    raw_value = os.getenv(DRY_RUN_ENV_VAR)
+    if raw_value is None:
+        return False
+
+    normalized_value = raw_value.strip().lower()
+    if normalized_value in {"1", "true", "yes", "on"}:
+        return True
+    if normalized_value in {"", "0", "false", "no", "off"}:
+        return False
+
+    raise ValueError(
+        f"{DRY_RUN_ENV_VAR} must be one of: 1, true, yes, on, 0, false, no, off."
+    )
 
 
 def _current_timestamp() -> str:
