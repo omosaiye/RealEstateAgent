@@ -27,6 +27,7 @@ from src.services.summarize_service import (
     ListingSummarizer,
     OpenAISummarizer,
     SummarizerError,
+    format_summary_fallback,
 )
 from src.services.telegram_service import Notifier, TelegramError, TelegramNotifier
 
@@ -282,18 +283,35 @@ def _run_single_search(
         )
         return 0
 
-    resolved_summarizer = summarizer or OpenAISummarizer()
-    summary_text = resolved_summarizer.summarize(
-        search_config.search_name,
-        search_config,
-        sendable_listings,
-    )
+    summary_fallback_used = False
+    try:
+        resolved_summarizer = summarizer or OpenAISummarizer()
+        summary_text = resolved_summarizer.summarize(
+            search_config.search_name,
+            search_config,
+            sendable_listings,
+        )
+    except SummarizerError as exc:
+        summary_fallback_used = True
+        summary_text = format_summary_fallback(
+            search_config.search_name,
+            search_config,
+            sendable_listings,
+        )
+        log_event(
+            logger,
+            logging.WARNING,
+            "summary_fallback_used",
+            search_name=search_config.search_name,
+            error=str(exc),
+        )
     log_event(
         logger,
         logging.INFO,
         "summary_complete",
         search_name=search_config.search_name,
         changed=len(sendable_listings),
+        fallback_used=summary_fallback_used,
     )
 
     if dry_run:

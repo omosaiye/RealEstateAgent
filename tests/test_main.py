@@ -7,6 +7,7 @@ from src.main import main, run_listing_monitor
 from src.models import Listing, SearchConfig
 from src.providers.base import ProviderError
 from src.services.state_service import ListingState
+from src.services.summarize_service import SummarizerError, format_summary_fallback
 from src.services.telegram_service import TelegramError
 
 
@@ -24,7 +25,8 @@ class FakeProvider:
 
 
 class FakeSummarizer:
-    def __init__(self) -> None:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
         self.calls: list[dict[str, object]] = []
 
     def summarize(
@@ -33,6 +35,8 @@ class FakeSummarizer:
         criteria: SearchConfig,
         listings: list[Listing],
     ) -> str:
+        if self._error is not None:
+            raise self._error
         self.calls.append(
             {
                 "search_name": search_name,
@@ -285,6 +289,89 @@ def test_run_listing_monitor_dry_run_logs_message_and_skips_send_and_state_updat
     assert "Summary for triangle_homes: 1 listing(s)" in caplog.text
     assert "event=state_persist_skipped" in caplog.text
     assert 'dry_run=true' in caplog.text
+
+
+def test_run_listing_monitor_uses_fallback_summary_when_default_summarizer_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    search_config = build_search_config()
+    provider = FakeProvider(
+        {
+            search_config.search_name: [build_listing()],
+        }
+    )
+    notifier = FakeNotifier()
+    state_service = FakeStateService()
+    logger = logging.getLogger("tests.test_main.default_summarizer_fallback")
+
+    monkeypatch.setattr(
+        main_module,
+        "OpenAISummarizer",
+        lambda: (_ for _ in ()).throw(SummarizerError("missing OPENAI_API_KEY")),
+    )
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        provider=provider,
+        summarizer=None,
+        notifier=notifier,
+        state_service=state_service,
+        logger=logger,
+    )
+
+    assert exit_code == 0
+    assert notifier.messages == [
+        format_summary_fallback(
+            search_config.search_name,
+            search_config,
+            [build_listing()],
+        )
+    ]
+    assert len(state_service.upsert_calls) == 1
+    assert "event=summary_fallback_used" in caplog.text
+    assert "missing OPENAI_API_KEY" in caplog.text
+    assert "fallback_used=true" in caplog.text
+
+
+def test_run_listing_monitor_uses_fallback_summary_when_injected_summarizer_fails(
+    caplog,
+) -> None:
+    search_config = build_search_config()
+    listing = build_listing()
+    provider = FakeProvider(
+        {
+            search_config.search_name: [listing],
+        }
+    )
+    summarizer = FakeSummarizer(SummarizerError("OpenAI request failed"))
+    notifier = FakeNotifier()
+    state_service = FakeStateService()
+    logger = logging.getLogger("tests.test_main.injected_summarizer_fallback")
+
+    caplog.set_level(logging.INFO, logger=logger.name)
+    exit_code = run_listing_monitor(
+        searches=[search_config],
+        provider=provider,
+        summarizer=summarizer,
+        notifier=notifier,
+        state_service=state_service,
+        logger=logger,
+    )
+
+    assert exit_code == 0
+    assert notifier.messages == [
+        format_summary_fallback(
+            search_config.search_name,
+            search_config,
+            [listing],
+        )
+    ]
+    assert len(state_service.upsert_calls) == 1
+    assert "event=summary_fallback_used" in caplog.text
+    assert "OpenAI request failed" in caplog.text
+    assert "fallback_used=true" in caplog.text
 
 
 def test_run_listing_monitor_dry_run_uses_noop_notifier_when_none_is_supplied(

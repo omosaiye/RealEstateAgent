@@ -41,8 +41,8 @@ jobs:
         run: python -m src.main --log-level INFO
 
       - name: Save SQLite state cache
-        if: steps.run-listing-monitor.outcome == 'success'
+        if: ${{ always() && hashFiles('listing_state.db') != '' }}
         uses: actions/cache/save@v4
         with:
           path: listing_state.db
-          key: ${{ steps.restore-listing-state.outputs.cache-primary-key }}
+          key: listing-state-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
