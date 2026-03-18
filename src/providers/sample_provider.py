@@ -1,8 +1,9 @@
-"""Sample provider adapter that normalizes API results into ``Listing`` objects."""
+"""RentCast provider adapter that normalizes API results into ``Listing`` objects."""
 
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -12,46 +13,24 @@ import httpx
 from src.models import Listing, RawPayload, SearchConfig
 from src.providers.base import ListingProvider, ProviderError
 
-DEFAULT_SAMPLE_PROVIDER_URL = "https://api.example.com/v1/listings"
+DEFAULT_RENTCAST_LISTINGS_URL = "https://api.rentcast.io/v1/listings/sale"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_RETRY_BACKOFF_SECONDS = (0.25, 0.5)
+DEFAULT_QUERY_LIMIT = "500"
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+ZIP_CODE_PATTERN = re.compile(r"^\d{5}(?:-\d{4})?$")
 
 
-class SampleListingProvider(ListingProvider):
-    """Simple HTTP provider adapter for a sample listings API.
+class RentCastListingProvider(ListingProvider):
+    """HTTP provider adapter for the RentCast sale listings API."""
 
-    Expected response shape::
-
-        {
-            "results": [
-                {
-                    "id": "listing-123",
-                    "address": "123 Main St",
-                    "city": "Durham",
-                    "state": "NC",
-                    "zip_code": "27701",
-                    "price": 399000,
-                    "beds": 3,
-                    "baths": 2.5,
-                    "sqft": 1800,
-                    "property_type": "single_family",
-                    "hoa_monthly": 125,
-                    "status": "active",
-                    "url": "https://example.com/listings/listing-123",
-                    "description": "Updated kitchen and fenced yard."
-                }
-            ]
-        }
-    """
-
-    provider_name = "sample_provider"
+    provider_name = "rentcast"
 
     def __init__(
         self,
         *,
         api_key: str | None = None,
-        base_url: str = DEFAULT_SAMPLE_PROVIDER_URL,
+        base_url: str = DEFAULT_RENTCAST_LISTINGS_URL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         retry_backoff_seconds: tuple[float, ...] = DEFAULT_RETRY_BACKOFF_SECONDS,
         client: httpx.Client | None = None,
@@ -65,7 +44,7 @@ class SampleListingProvider(ListingProvider):
         self._sleep = sleep
 
     def fetch_listings(self, search_config: SearchConfig) -> list[Listing]:
-        """Fetch and normalize provider results for a single search."""
+        """Fetch and normalize RentCast sale listings for a single search."""
 
         payload = self._fetch_payload(search_config)
         raw_results = _extract_results(payload)
@@ -75,10 +54,10 @@ class SampleListingProvider(ListingProvider):
             for raw_listing in raw_results
         ]
 
-    def _fetch_payload(self, search_config: SearchConfig) -> dict[str, Any]:
-        params = {"location": search_config.location}
+    def _fetch_payload(self, search_config: SearchConfig) -> list[dict[str, Any]] | dict[str, Any]:
+        params = _build_query_params(search_config)
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "X-Api-Key": self._api_key,
             "Accept": "application/json",
         }
 
@@ -90,37 +69,37 @@ class SampleListingProvider(ListingProvider):
             payload = response.json()
         except httpx.TimeoutException as exc:
             raise ProviderError(
-                "Sample provider request timed out after "
+                "RentCast request timed out after "
                 f"{self._timeout_seconds} seconds for search "
                 f"'{search_config.search_name}' after "
                 f"{_max_attempts(self._retry_backoff_seconds)} attempts."
             ) from exc
         except httpx.NetworkError as exc:
             raise ProviderError(
-                f"Sample provider request failed for search "
+                f"RentCast request failed for search "
                 f"'{search_config.search_name}' after "
                 f"{_max_attempts(self._retry_backoff_seconds)} attempts."
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
-                "Sample provider request failed with status "
+                "RentCast request failed with status "
                 f"{exc.response.status_code} for search "
                 f"'{search_config.search_name}'{_attempt_suffix(exc.request)}"
             ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(
-                f"Sample provider request failed for search '{search_config.search_name}'."
+                f"RentCast request failed for search '{search_config.search_name}'."
             ) from exc
         except ValueError as exc:
             raise ProviderError(
-                f"Sample provider returned invalid JSON for search '{search_config.search_name}'."
+                f"RentCast returned invalid JSON for search '{search_config.search_name}'."
             ) from exc
 
         if payload is None:
-            return {}
+            return []
 
-        if not isinstance(payload, dict):
-            raise ProviderError("Sample provider response must be a JSON object.")
+        if not isinstance(payload, list | dict):
+            raise ProviderError("RentCast response must be a JSON array or object.")
 
         return payload
 
@@ -180,14 +159,45 @@ class SampleListingProvider(ListingProvider):
             )
 
 
+# Backward-compatible alias for existing imports while the repo transitions names.
+SampleListingProvider = RentCastListingProvider
+
+
 def _resolve_api_key(api_key: str | None) -> str:
     resolved_api_key = api_key or os.getenv("LISTING_PROVIDER_API_KEY", "").strip()
     if not resolved_api_key:
         raise ProviderError(
             "LISTING_PROVIDER_API_KEY environment variable is required for "
-            "SampleListingProvider."
+            "RentCastListingProvider."
         )
     return resolved_api_key
+
+
+def _build_query_params(search_config: SearchConfig) -> dict[str, str]:
+    params = {
+        "limit": DEFAULT_QUERY_LIMIT,
+        "suppressLogging": "true",
+    }
+    params.update(_location_query_params(search_config.location))
+    return params
+
+
+def _location_query_params(location: str) -> dict[str, str]:
+    normalized_location = location.strip()
+    if not normalized_location:
+        raise ProviderError("Search location must be a non-empty string.")
+
+    if ZIP_CODE_PATTERN.fullmatch(normalized_location):
+        return {"zipCode": normalized_location}
+
+    if "," in normalized_location:
+        city_part, state_part = normalized_location.rsplit(",", maxsplit=1)
+        city = city_part.strip()
+        state = state_part.strip()
+        if city and state:
+            return {"city": city, "state": state}
+
+    return {"city": normalized_location}
 
 
 def _max_attempts(retry_backoff_seconds: tuple[float, ...]) -> int:
@@ -226,18 +236,21 @@ def _attempt_suffix(request: httpx.Request) -> str:
     return "."
 
 
-def _extract_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_results = payload.get("results")
-    if raw_results is None:
-        return []
+def _extract_results(payload: list[dict[str, Any]] | dict[str, Any]) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        raw_results = payload
+    else:
+        raw_results = payload.get("results")
+        if raw_results is None:
+            return []
 
     if not isinstance(raw_results, list):
-        raise ProviderError("Sample provider response field 'results' must be a list.")
+        raise ProviderError("RentCast response results must be a list.")
 
     normalized_results: list[dict[str, Any]] = []
     for raw_listing in raw_results:
         if not isinstance(raw_listing, dict):
-            raise ProviderError("Each sample provider listing must be a JSON object.")
+            raise ProviderError("Each RentCast listing must be a JSON object.")
         normalized_results.append(raw_listing)
 
     return normalized_results
@@ -248,12 +261,12 @@ def _normalize_listing(
     search_config: SearchConfig,
     provider_name: str,
 ) -> Listing:
-    listing_id = _require_string(raw_listing, "id")
-    address = _require_string(raw_listing, "address")
+    listing_id = _require_listing_id(raw_listing)
+    address = _require_string(raw_listing, "addressLine1", fallback_fields=("formattedAddress",))
     city = _require_string(raw_listing, "city")
     state = _require_string(raw_listing, "state")
     price = _require_int(raw_listing, "price")
-    url = _require_string(raw_listing, "url")
+    url = _require_string(raw_listing, "url", fallback_fields=("listingUrl",))
 
     return Listing(
         listing_id=listing_id,
@@ -261,69 +274,188 @@ def _normalize_listing(
         address=address,
         city=city,
         state=state,
-        zip_code=_optional_string(raw_listing, "zip_code"),
+        zip_code=_optional_string(raw_listing, "zipCode", fallback_fields=("zip_code",)),
         price=price,
-        beds=_optional_number(raw_listing, "beds"),
-        baths=_optional_number(raw_listing, "baths"),
-        sqft=_optional_int(raw_listing, "sqft"),
-        property_type=_optional_string(raw_listing, "property_type"),
-        hoa_monthly=_optional_int(raw_listing, "hoa_monthly"),
-        status=_optional_string(raw_listing, "status"),
+        beds=_optional_number(raw_listing, "bedrooms", fallback_fields=("beds",)),
+        baths=_optional_number(raw_listing, "bathrooms", fallback_fields=("baths",)),
+        sqft=_optional_int(raw_listing, "squareFootage", fallback_fields=("sqft",)),
+        property_type=_normalize_property_type(
+            _optional_string(raw_listing, "propertyType", fallback_fields=("property_type",))
+        ),
+        hoa_monthly=_extract_hoa_fee(raw_listing),
+        status=_normalize_token(
+            _optional_string(raw_listing, "status", fallback_fields=("listingStatus",))
+        ),
         url=url,
-        description=_optional_string(raw_listing, "description"),
+        description=_optional_string(raw_listing, "description", fallback_fields=("remarks",)),
         provider_name=provider_name,
         raw_payload=dict(raw_listing),
     )
 
 
-def _require_string(raw_listing: RawPayload, field_name: str) -> str:
-    value = raw_listing.get(field_name)
+def _require_listing_id(raw_listing: RawPayload) -> str:
+    for field_name in ("id", "listingId"):
+        value = raw_listing.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, int):
+            return str(value)
+
+    raise ProviderError("RentCast listing must include a non-empty 'id' or 'listingId'.")
+
+
+def _require_string(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...] = (),
+) -> str:
+    value = _first_present_value(raw_listing, field_name, fallback_fields=fallback_fields)
     if not isinstance(value, str) or not value.strip():
+        all_fields = ", ".join((field_name, *fallback_fields))
         raise ProviderError(
-            f"Sample provider listing field '{field_name}' must be a non-empty string."
+            f"RentCast listing field '{all_fields}' must contain a non-empty string."
         )
     return value.strip()
 
 
-def _optional_string(raw_listing: RawPayload, field_name: str) -> str | None:
-    value = raw_listing.get(field_name)
+def _optional_string(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...] = (),
+) -> str | None:
+    value = _first_present_value(raw_listing, field_name, fallback_fields=fallback_fields)
     if value is None:
         return None
     if not isinstance(value, str):
+        all_fields = ", ".join((field_name, *fallback_fields))
         raise ProviderError(
-            f"Sample provider listing field '{field_name}' must be a string when present."
+            f"RentCast listing field '{all_fields}' must be a string when present."
         )
 
     normalized_value = value.strip()
     return normalized_value or None
 
 
-def _require_int(raw_listing: RawPayload, field_name: str) -> int:
-    value = raw_listing.get(field_name)
-    if isinstance(value, bool) or not isinstance(value, int):
+def _require_int(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...] = (),
+) -> int:
+    value = _first_present_value(raw_listing, field_name, fallback_fields=fallback_fields)
+    resolved_int = _coerce_int(value)
+    if resolved_int is None:
+        all_fields = ", ".join((field_name, *fallback_fields))
         raise ProviderError(
-            f"Sample provider listing field '{field_name}' must be an integer."
+            f"RentCast listing field '{all_fields}' must be an integer."
         )
-    return value
+    return resolved_int
 
 
-def _optional_int(raw_listing: RawPayload, field_name: str) -> int | None:
-    value = raw_listing.get(field_name)
+def _optional_int(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...] = (),
+) -> int | None:
+    value = _first_present_value(raw_listing, field_name, fallback_fields=fallback_fields)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int):
+
+    resolved_int = _coerce_int(value)
+    if resolved_int is None:
+        all_fields = ", ".join((field_name, *fallback_fields))
         raise ProviderError(
-            f"Sample provider listing field '{field_name}' must be an integer when present."
+            f"RentCast listing field '{all_fields}' must be an integer when present."
         )
-    return value
+    return resolved_int
 
 
-def _optional_number(raw_listing: RawPayload, field_name: str) -> float | None:
-    value = raw_listing.get(field_name)
+def _optional_number(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...] = (),
+) -> float | None:
+    value = _first_present_value(raw_listing, field_name, fallback_fields=fallback_fields)
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
+        all_fields = ", ".join((field_name, *fallback_fields))
         raise ProviderError(
-            f"Sample provider listing field '{field_name}' must be numeric when present."
+            f"RentCast listing field '{all_fields}' must be numeric when present."
         )
     return float(value)
+
+
+def _extract_hoa_fee(raw_listing: RawPayload) -> int | None:
+    hoa_value = raw_listing.get("hoa")
+    if hoa_value is None:
+        return _optional_int(raw_listing, "hoaFee", fallback_fields=("hoa_monthly",))
+
+    if not isinstance(hoa_value, dict):
+        raise ProviderError("RentCast listing field 'hoa' must be an object when present.")
+
+    fee = hoa_value.get("fee")
+    if fee is None:
+        return None
+
+    resolved_fee = _coerce_int(fee)
+    if resolved_fee is None:
+        raise ProviderError("RentCast listing field 'hoa.fee' must be an integer.")
+    return resolved_fee
+
+
+def _first_present_value(
+    raw_listing: RawPayload,
+    field_name: str,
+    *,
+    fallback_fields: tuple[str, ...],
+) -> Any:
+    for candidate_field in (field_name, *fallback_fields):
+        if candidate_field in raw_listing:
+            return raw_listing[candidate_field]
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _normalize_property_type(value: str | None) -> str | None:
+    normalized_value = _normalize_token(value)
+    if normalized_value is None:
+        return None
+
+    property_type_map = {
+        "single_family": "single_family",
+        "single_family_home": "single_family",
+        "townhouse": "townhome",
+        "townhome": "townhome",
+        "condominium": "condo",
+        "condo": "condo",
+        "manufactured": "manufactured",
+        "land": "land",
+        "multi_family": "multi_family",
+        "multifamily": "multi_family",
+    }
+    return property_type_map.get(normalized_value, normalized_value)
+
+
+def _normalize_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized_value = value.strip().lower()
+    if not normalized_value:
+        return None
+
+    return normalized_value.replace("-", "_").replace(" ", "_")

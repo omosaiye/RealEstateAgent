@@ -19,7 +19,7 @@ from src.config import DEFAULT_SEARCHES_PATH, ConfigError, load_searches
 from src.logging_setup import configure_logging, get_logger, log_event
 from src.models import Listing, SearchConfig
 from src.providers.base import ListingProvider, ProviderError
-from src.providers.sample_provider import SampleListingProvider
+from src.providers.sample_provider import RentCastListingProvider
 from src.services.dedupe_service import classify_listings
 from src.services.filter_service import filter_listings
 from src.services.state_service import DEFAULT_DB_PATH, SQLiteStateService, StateError
@@ -87,7 +87,7 @@ def run_listing_monitor(
         return 0
 
     try:
-        resolved_provider = provider or SampleListingProvider()
+        resolved_provider = provider or RentCastListingProvider()
     except ProviderError as exc:
         log_event(app_logger, logging.ERROR, "run_failed", error=str(exc))
         return 1

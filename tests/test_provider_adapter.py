@@ -81,26 +81,25 @@ def test_sample_provider_normalizes_results_into_listing_objects(
     search_config: SearchConfig,
 ) -> None:
     client = SpyHttpClient(
-        {
-            "results": [
-                {
-                    "id": "listing-123",
-                    "address": "123 Main St",
-                    "city": "Durham",
-                    "state": "NC",
-                    "zip_code": "27701",
-                    "price": 399000,
-                    "beds": 3,
-                    "baths": 2.5,
-                    "sqft": 1800,
-                    "property_type": "single_family",
-                    "hoa_monthly": 125,
-                    "status": "active",
-                    "url": "https://example.com/listings/listing-123",
-                    "description": "Updated kitchen and fenced yard.",
-                }
-            ]
-        }
+        [
+            {
+                "id": "listing-123",
+                "formattedAddress": "123 Main St, Durham, NC 27701",
+                "addressLine1": "123 Main St",
+                "city": "Durham",
+                "state": "NC",
+                "zipCode": "27701",
+                "price": 399000,
+                "bedrooms": 3,
+                "bathrooms": 2.5,
+                "squareFootage": 1800,
+                "propertyType": "Single Family",
+                "hoa": {"fee": 125},
+                "status": "Active",
+                "url": "https://example.com/listings/listing-123",
+                "description": "Updated kitchen and fenced yard.",
+            }
+        ]
     )
     provider = SampleListingProvider(
         api_key="test-api-key",
@@ -127,29 +126,35 @@ def test_sample_provider_normalizes_results_into_listing_objects(
     assert listing.status == "active"
     assert listing.url == "https://example.com/listings/listing-123"
     assert listing.description == "Updated kitchen and fenced yard."
-    assert listing.provider_name == "sample_provider"
+    assert listing.provider_name == "rentcast"
     assert listing.raw_payload == {
         "id": "listing-123",
-        "address": "123 Main St",
+        "formattedAddress": "123 Main St, Durham, NC 27701",
+        "addressLine1": "123 Main St",
         "city": "Durham",
         "state": "NC",
-        "zip_code": "27701",
+        "zipCode": "27701",
         "price": 399000,
-        "beds": 3,
-        "baths": 2.5,
-        "sqft": 1800,
-        "property_type": "single_family",
-        "hoa_monthly": 125,
-        "status": "active",
+        "bedrooms": 3,
+        "bathrooms": 2.5,
+        "squareFootage": 1800,
+        "propertyType": "Single Family",
+        "hoa": {"fee": 125},
+        "status": "Active",
         "url": "https://example.com/listings/listing-123",
         "description": "Updated kitchen and fenced yard.",
     }
     assert client.calls == [
         {
-            "url": "https://api.example.com/v1/listings",
-            "params": {"location": "Durham, NC"},
+            "url": "https://api.rentcast.io/v1/listings/sale",
+            "params": {
+                "limit": "500",
+                "suppressLogging": "true",
+                "city": "Durham",
+                "state": "NC",
+            },
             "headers": {
-                "Authorization": "Bearer test-api-key",
+                "X-Api-Key": "test-api-key",
                 "Accept": "application/json",
             },
             "timeout": 7.5,
@@ -162,7 +167,7 @@ def test_sample_provider_returns_empty_list_for_empty_results(
 ) -> None:
     provider = SampleListingProvider(
         api_key="test-api-key",
-        client=SpyHttpClient({"results": []}),
+        client=SpyHttpClient([]),
     )
 
     listings = provider.fetch_listings(search_config)
@@ -190,7 +195,7 @@ def test_sample_provider_retries_timeout_then_returns_results(
             lambda request: httpx.ReadTimeout("Request timed out", request=request),
             lambda request: httpx.Response(
                 200,
-                json={"results": []},
+                json=[],
                 request=request,
             ),
         ]
@@ -217,12 +222,12 @@ def test_sample_provider_retries_retryable_http_status_then_returns_results(
         outcomes=[
             lambda request: httpx.Response(
                 503,
-                json={"results": []},
+                json=[],
                 request=request,
             ),
             lambda request: httpx.Response(
                 200,
-                json={"results": []},
+                json=[],
                 request=request,
             ),
         ]
@@ -249,12 +254,12 @@ def test_sample_provider_stops_after_small_number_of_retryable_failures(
         outcomes=[
             lambda request: httpx.Response(
                 503,
-                json={"results": []},
+                json=[],
                 request=request,
             ),
             lambda request: httpx.Response(
                 503,
-                json={"results": []},
+                json=[],
                 request=request,
             ),
         ]

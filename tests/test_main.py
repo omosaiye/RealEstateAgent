@@ -326,7 +326,7 @@ def test_run_listing_monitor_succeeds_when_all_searches_are_disabled_without_bui
 
     monkeypatch.setattr(
         main_module,
-        "SampleListingProvider",
+        "RentCastListingProvider",
         lambda: (_ for _ in ()).throw(AssertionError("provider should not be built")),
     )
     monkeypatch.setattr(

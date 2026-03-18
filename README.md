@@ -19,11 +19,11 @@ This README is written for a junior engineer setting up the project from scratch
 - Search config loading is implemented in `src/config.py`.
 - Deterministic filtering, deduplication, SQLite state handling, Telegram delivery, and summarization are implemented and covered by tests.
 - A GitHub Actions workflow exists at `.github/workflows/listing_monitor.yml`.
-- The checked-in provider is still a sample adapter in `src/providers/sample_provider.py`.
+- The checked-in provider is a RentCast sale listings adapter in `src/providers/sample_provider.py`.
 
 Important current limitations:
 
-- The sample provider points to `https://api.example.com/v1/listings`, which is a placeholder endpoint. A default end-to-end run will not succeed against real listing data until the provider adapter is wired to a real API.
+- The current provider integration assumes `config/searches.yaml` locations are either `City, ST` or ZIP code values so they can be translated into RentCast query parameters.
 
 ## Repository Layout
 
@@ -258,7 +258,7 @@ Important safety note:
 
 Important current limitation:
 
-- The checked-in `SampleListingProvider` uses a placeholder base URL. Until the provider adapter is connected to a real listing API, the default end-to-end local run is mainly useful for startup checks, failure-path testing, and understanding the orchestration flow.
+- The checked-in provider fetches RentCast sale listings and expects search locations in `City, ST` or ZIP code form.
 
 ## Run Tests and Checks
 
@@ -339,7 +339,7 @@ To run the workflow manually:
 
 ### Important Deployment Notes
 
-- The current workflow still depends on the sample provider adapter, so a real production deployment is blocked until a real provider endpoint is implemented.
+- The current workflow depends on a valid RentCast API key and search locations that the RentCast listings endpoint can resolve.
 - Manual `workflow_dispatch` runs are not dry runs unless you explicitly pass or configure dry-run behavior for the workflow command.
 
 ## Troubleshooting
@@ -404,13 +404,11 @@ Common causes:
 
 ### The app fails during provider fetch
 
-This is expected with the checked-in sample provider unless you replace the placeholder endpoint with a real provider implementation.
+Check that:
 
-Current default provider URL:
-
-```text
-https://api.example.com/v1/listings
-```
+- `LISTING_PROVIDER_API_KEY` is loaded
+- `config/searches.yaml` uses `City, ST` or ZIP code locations
+- your network can reach `https://api.rentcast.io`
 
 ### The app fails when sending Telegram messages
 
