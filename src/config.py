@@ -62,7 +62,26 @@ def load_searches(path: str | Path = DEFAULT_SEARCHES_PATH) -> list[SearchConfig
             f"Search config 'searches' value must be a list: {config_path}"
         )
 
-    return [_build_search_config(raw_search, index) for index, raw_search in enumerate(raw_searches, start=1)]
+    searches = [
+        _build_search_config(raw_search, index)
+        for index, raw_search in enumerate(raw_searches, start=1)
+    ]
+    _ensure_unique_search_names(searches, config_path)
+    return searches
+
+
+def _ensure_unique_search_names(
+    searches: list[SearchConfig],
+    config_path: Path,
+) -> None:
+    seen_search_names: set[str] = set()
+
+    for search in searches:
+        if search.search_name in seen_search_names:
+            raise ConfigError(
+                f"Duplicate search_name '{search.search_name}' found in {config_path}"
+            )
+        seen_search_names.add(search.search_name)
 
 
 def _build_search_config(raw_search: Any, index: int) -> SearchConfig:

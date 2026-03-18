@@ -175,6 +175,76 @@ def test_sample_provider_returns_empty_list_for_empty_results(
     assert listings == []
 
 
+def test_sample_provider_skips_malformed_listing_and_returns_valid_results(
+    search_config: SearchConfig,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=SpyHttpClient(
+            [
+                {
+                    "id": "listing-123",
+                    "addressLine1": "123 Main St",
+                    "city": "Durham",
+                    "state": "NC",
+                    "price": 399000,
+                    "bedrooms": 3,
+                    "bathrooms": 2.5,
+                    "url": "https://example.com/listings/listing-123",
+                },
+                {
+                    "id": "listing-bad",
+                    "city": "Durham",
+                    "state": "NC",
+                    "price": 450000,
+                    "url": "https://example.com/listings/listing-bad",
+                },
+            ]
+        ),
+    )
+
+    caplog.set_level("WARNING")
+    listings = provider.fetch_listings(search_config)
+
+    assert [listing.listing_id for listing in listings] == ["listing-123"]
+    assert "event=provider_listing_skipped" in caplog.text
+    assert "listing_index=2" in caplog.text
+
+
+def test_sample_provider_returns_empty_list_when_all_rows_are_malformed(
+    search_config: SearchConfig,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = SampleListingProvider(
+        api_key="test-api-key",
+        client=SpyHttpClient(
+            [
+                {
+                    "id": "listing-bad-1",
+                    "city": "Durham",
+                    "state": "NC",
+                    "price": 450000,
+                    "url": "https://example.com/listings/listing-bad-1",
+                },
+                {
+                    "id": "listing-bad-2",
+                    "addressLine1": "456 Oak Ave",
+                    "state": "NC",
+                    "price": 460000,
+                    "url": "https://example.com/listings/listing-bad-2",
+                },
+            ]
+        ),
+    )
+
+    caplog.set_level("WARNING")
+    listings = provider.fetch_listings(search_config)
+
+    assert listings == []
+    assert caplog.text.count("event=provider_listing_skipped") == 2
+
+
 def test_sample_provider_requires_provider_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

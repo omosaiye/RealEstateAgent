@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -19,6 +20,7 @@ DEFAULT_RETRY_BACKOFF_SECONDS = (0.25, 0.5)
 DEFAULT_QUERY_LIMIT = "500"
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 ZIP_CODE_PATTERN = re.compile(r"^\d{5}(?:-\d{4})?$")
+LOGGER = logging.getLogger(__name__)
 
 
 class RentCastListingProvider(ListingProvider):
@@ -48,11 +50,24 @@ class RentCastListingProvider(ListingProvider):
 
         payload = self._fetch_payload(search_config)
         raw_results = _extract_results(payload)
+        normalized_listings: list[Listing] = []
 
-        return [
-            _normalize_listing(raw_listing, search_config, self.provider_name)
-            for raw_listing in raw_results
-        ]
+        for index, raw_listing in enumerate(raw_results, start=1):
+            try:
+                normalized_listings.append(
+                    _normalize_listing(raw_listing, search_config, self.provider_name)
+                )
+            except ProviderError as exc:
+                LOGGER.warning(
+                    "event=provider_listing_skipped search_name=%r provider=%r "
+                    "listing_index=%d error=%r",
+                    search_config.search_name,
+                    self.provider_name,
+                    index,
+                    str(exc),
+                )
+
+        return normalized_listings
 
     def _fetch_payload(self, search_config: SearchConfig) -> list[dict[str, Any]] | dict[str, Any]:
         params = _build_query_params(search_config)

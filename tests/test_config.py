@@ -74,3 +74,37 @@ def test_sample_search_config_loads_successfully() -> None:
     assert len(searches) == 1
     assert searches[0].search_name == "raleigh_primary"
     assert searches[0].property_types == ["single_family", "townhome"]
+
+
+def test_load_searches_raises_readable_error_for_duplicate_search_name(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "searches.yaml"
+    config_path.write_text(
+        """
+searches:
+  - search_name: triangle_homes
+    enabled: true
+    location: "Durham, NC"
+    max_price: 450000
+    min_beds: 3
+    min_baths: 2
+    property_types:
+      - single_family
+  - search_name: triangle_homes
+    enabled: true
+    location: "Raleigh, NC"
+    max_price: 550000
+    min_beds: 4
+    min_baths: 3
+    property_types:
+      - townhome
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="Duplicate search_name 'triangle_homes' found",
+    ):
+        load_searches(config_path)
