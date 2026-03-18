@@ -117,7 +117,7 @@ Important notes:
 - `LISTING_PROVIDER_API_KEY` is required when at least one enabled search runs.
 - `OPENAI_API_KEY` is required only when the run has new or changed listings that need summarization.
 - If dry-run mode is enabled, `src.main` skips real Telegram setup and delivery. In that mode, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not required.
-- If `OPENAI_API_KEY` is missing on a run that needs a summary, the run fails clearly before fallback formatting can be used. The fallback only applies after the OpenAI request is attempted and fails.
+- If summary generation cannot proceed, the app falls back to deterministic summary text so listing alerts can still be sent.
 
 ## Configure `config/searches.yaml`
 
@@ -313,7 +313,7 @@ Current workflow behavior:
 - installs dependencies with `pip`
 - restores the last cached `listing_state.db` before each run
 - runs `python -m src.main --log-level INFO`
-- saves the updated `listing_state.db` back to the GitHub Actions cache after a successful run
+- saves `listing_state.db` back to the GitHub Actions cache after the run whenever the file exists, even if one search failed
 
 ### Required GitHub Repository Secrets
 
@@ -427,7 +427,7 @@ pytest tests/test_telegram_service.py
 
 ### GitHub Actions run starts without prior listing state
 
-The workflow restores `listing_state.db` from the GitHub Actions cache before the Python job runs and saves it again after a successful run. If a run behaves like it has no prior state, check whether a previous successful run created the cache for that branch and operating system.
+The workflow restores `listing_state.db` from the GitHub Actions cache before the Python job runs and saves it again after the run whenever the file exists. If a run behaves like it has no prior state, check whether a previous run created the cache for that branch and operating system.
 
 ## Suggested Local Verification Order
 

@@ -212,7 +212,7 @@ def test_sample_provider_skips_malformed_listing_and_returns_valid_results(
     assert "listing_index=2" in caplog.text
 
 
-def test_sample_provider_returns_empty_list_when_all_rows_are_malformed(
+def test_sample_provider_raises_when_all_rows_are_malformed(
     search_config: SearchConfig,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -239,9 +239,12 @@ def test_sample_provider_returns_empty_list_when_all_rows_are_malformed(
     )
 
     caplog.set_level("WARNING")
-    listings = provider.fetch_listings(search_config)
+    with pytest.raises(
+        ProviderError,
+        match="RentCast returned listings for search 'triangle_homes', but none could be normalized.",
+    ):
+        provider.fetch_listings(search_config)
 
-    assert listings == []
     assert caplog.text.count("event=provider_listing_skipped") == 2
 
 

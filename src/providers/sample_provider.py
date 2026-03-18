@@ -51,6 +51,7 @@ class RentCastListingProvider(ListingProvider):
         payload = self._fetch_payload(search_config)
         raw_results = _extract_results(payload)
         normalized_listings: list[Listing] = []
+        skipped_count = 0
 
         for index, raw_listing in enumerate(raw_results, start=1):
             try:
@@ -58,6 +59,7 @@ class RentCastListingProvider(ListingProvider):
                     _normalize_listing(raw_listing, search_config, self.provider_name)
                 )
             except ProviderError as exc:
+                skipped_count += 1
                 LOGGER.warning(
                     "event=provider_listing_skipped search_name=%r provider=%r "
                     "listing_index=%d error=%r",
@@ -66,6 +68,12 @@ class RentCastListingProvider(ListingProvider):
                     index,
                     str(exc),
                 )
+
+        if raw_results and skipped_count == len(raw_results):
+            raise ProviderError(
+                "RentCast returned listings for search "
+                f"'{search_config.search_name}', but none could be normalized."
+            )
 
         return normalized_listings
 
